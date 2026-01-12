@@ -352,6 +352,7 @@ class PendingOrderWorker:
                                 continue
 
                 # Check for MT5 client (forex)
+                global MT5Client
                 if MT5Client is None:
                     try:
                         from app.services.mt5_trading import MT5Client as _MT5Client
@@ -771,29 +772,6 @@ class PendingOrderWorker:
         if IBKRClient is not None and isinstance(client, IBKRClient):
             # Execute IBKR order (separate flow for stocks)
             self._execute_ibkr_order(
-                order_id=order_id,
-                order_row=order_row,
-                payload=payload,
-                client=client,
-                strategy_id=strategy_id,
-                exchange_config=exchange_config,
-                _notify_live_best_effort=_notify_live_best_effort,
-                _console_print=_console_print,
-            )
-            return
-
-        # Check if this is an MT5 client (Forex)
-        global MT5Client
-        if MT5Client is None:
-            try:
-                from app.services.mt5_trading import MT5Client as _MT5Client
-                MT5Client = _MT5Client
-            except ImportError:
-                pass
-
-        if MT5Client is not None and isinstance(client, MT5Client):
-            # Execute MT5 order (separate flow for forex)
-            self._execute_mt5_order(
                 order_id=order_id,
                 order_row=order_row,
                 payload=payload,
