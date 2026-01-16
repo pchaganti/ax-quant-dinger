@@ -591,7 +591,8 @@ class TradingExecutor:
             # 初始化阶段：获取历史K线并计算指标
             # ============================================
             # logger.info(f"策略 {strategy_id} 初始化：获取历史K线数据...")
-            klines = self._fetch_latest_kline(symbol, timeframe, limit=500)
+            history_limit = int(os.getenv('K_LINE_HISTORY_GET_NUMBER', 500))
+            klines = self._fetch_latest_kline(symbol, timeframe, limit=history_limit)
             if not klines or len(klines) < 2:
                 logger.error(f"Strategy {strategy_id} failed to fetch K-lines")
                 return
