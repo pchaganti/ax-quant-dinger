@@ -1093,7 +1093,8 @@ class TradingExecutor:
                 market='Crypto',
                 symbol=symbol,
                 timeframe=timeframe,
-                limit=limit
+                limit=limit,
+                before_time=int(time.time())
             )
         except Exception as e:
             logger.error(f"Failed to fetch K-lines: {str(e)}")
