@@ -255,30 +255,86 @@ class PostgresCursor:
         return query
     
     def execute(self, query: str, args: Any = None):
-        """Execute SQL statement"""
+        """Execute SQL statement.
+
+        For INSERT statements without an explicit RETURNING clause, we try to
+        append ``RETURNING id`` so legacy callers can read ``cursor.lastrowid``.
+        But not every table has an ``id`` column (e.g. ``qd_oauth_states``
+        uses ``state`` as PK).  In that case psycopg2 raises
+        ``UndefinedColumn`` and aborts the whole transaction, which can
+        cascade into "column \"id\" does not exist" errors across the app.
+
+        To stay safe, wrap the RETURNING-id variant in a SAVEPOINT.  If it
+        fails with UndefinedColumn, roll back to the savepoint and retry the
+        plain INSERT without RETURNING.  The outer transaction is preserved.
+        """
         query = self._convert_placeholders(query)
-        
-        # Check if this is an INSERT and add RETURNING id if not present
+        if args is not None and not isinstance(args, (tuple, list)):
+            args = (args,)
+
         is_insert = query.strip().upper().startswith('INSERT')
-        if is_insert and 'RETURNING' not in query.upper():
-            query = query.rstrip(';').rstrip() + ' RETURNING id'
-        
+        has_returning = 'RETURNING' in query.upper()
+
+        if is_insert and not has_returning:
+            q_with_id = query.rstrip(';').rstrip() + ' RETURNING id'
+            savepoint = '_pg_ins_ret_id'
+            try:
+                self._cursor.execute(f"SAVEPOINT {savepoint}")
+            except Exception:
+                savepoint = None
+
+            try:
+                if args:
+                    result = self._cursor.execute(q_with_id, args)
+                else:
+                    result = self._cursor.execute(q_with_id)
+                try:
+                    row = self._cursor.fetchone()
+                    if row and 'id' in row:
+                        self._last_insert_id = row['id']
+                except Exception:
+                    pass
+                if savepoint:
+                    try:
+                        self._cursor.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    except Exception:
+                        pass
+                return result
+            except Exception as e:
+                # If the error is about missing id column, fall back.  Other
+                # errors (unique violation, NOT NULL, FK, ...) must propagate.
+                msg = str(e).lower()
+                is_missing_id = (
+                    'column "id" does not exist' in msg
+                    or 'undefinedcolumn' in e.__class__.__name__.lower()
+                    and '"id"' in msg
+                )
+                if not is_missing_id:
+                    raise
+                if savepoint:
+                    try:
+                        self._cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    except Exception:
+                        pass
+                # Retry without RETURNING id.  Leaves _last_insert_id as None.
+                if args:
+                    return self._cursor.execute(query, args)
+                return self._cursor.execute(query)
+
+        # Non-INSERT, or INSERT with caller-supplied RETURNING
         if args:
-            if not isinstance(args, (tuple, list)):
-                args = (args,)
             result = self._cursor.execute(query, args)
         else:
             result = self._cursor.execute(query)
-        
-        # Capture last insert id for INSERT statements
-        if is_insert:
+
+        if is_insert and has_returning:
             try:
                 row = self._cursor.fetchone()
                 if row and 'id' in row:
                     self._last_insert_id = row['id']
             except Exception:
                 pass
-        
+
         return result
     
     def fetchone(self) -> Optional[Dict[str, Any]]:

@@ -98,6 +98,19 @@ CREATE INDEX IF NOT EXISTS idx_usdt_orders_user_id ON qd_usdt_orders(user_id);
 CREATE INDEX IF NOT EXISTS idx_usdt_orders_status ON qd_usdt_orders(status);
 
 -- =============================================================================
+-- 1.59. OAuth CSRF State (多 worker / 多实例共享，避免 Invalid state)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS qd_oauth_states (
+    state VARCHAR(128) PRIMARY KEY,
+    provider VARCHAR(20) NOT NULL,
+    redirect TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    expires_at TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON qd_oauth_states(expires_at);
+
+-- =============================================================================
 -- 1.6. Verification Codes (邮箱验证码)
 -- =============================================================================
 

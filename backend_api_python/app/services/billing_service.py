@@ -283,7 +283,7 @@ class BillingService:
                         updated_at = NOW()
                     WHERE id = ?
                     """,
-                    (vip_expires_at, vip_plan, 1 if vip_is_lifetime else 0, user_id),
+                    (vip_expires_at, vip_plan, bool(vip_is_lifetime), user_id),
                 )
 
                 # Credits grants

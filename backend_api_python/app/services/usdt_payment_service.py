@@ -21,6 +21,10 @@ logger = get_logger(__name__)
 
 
 class UsdtPaymentService:
+    # Class-level cache: only run DDL once per process to avoid taking schema
+    # locks on every request (also prevents long-held txns when the DB is busy).
+    _schema_ensured: bool = False
+
     def __init__(self):
         self.billing = get_billing_service()
 
@@ -44,7 +48,15 @@ class UsdtPaymentService:
     # -------------------- Schema --------------------
 
     def _ensure_schema_best_effort(self, cur):
-        """Best-effort create table/columns for old databases."""
+        """Best-effort create table/columns for old databases.
+
+        Runs at most once per process (cached on the class) to avoid repeatedly
+        taking schema-level locks inside request/worker transactions, which on
+        a busy system contributes to `skipping vacuum --- lock not available`
+        and `idle in transaction` pressure.
+        """
+        if UsdtPaymentService._schema_ensured:
+            return
         try:
             cur.execute(
                 """
@@ -69,6 +81,7 @@ class UsdtPaymentService:
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_usdt_orders_address_unique ON qd_usdt_orders(chain, address)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_usdt_orders_user_id ON qd_usdt_orders(user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_usdt_orders_status ON qd_usdt_orders(status)")
+            UsdtPaymentService._schema_ensured = True
         except Exception:
             pass
 
@@ -175,6 +188,7 @@ class UsdtPaymentService:
 
     def get_order(self, user_id: int, order_id: int, refresh: bool = True) -> Tuple[bool, str, Dict[str, Any]]:
         try:
+            # Step 1: short read txn, release connection before any HTTP work
             with get_db_connection() as db:
                 cur = db.cursor()
                 self._ensure_schema_best_effort(cur)
@@ -189,20 +203,30 @@ class UsdtPaymentService:
                     (order_id, user_id),
                 )
                 row = cur.fetchone()
-                if not row:
-                    cur.close()
-                    return False, "order_not_found", {}
+                cur.close()
 
-                if refresh:
-                    logger.info(
-                        "USDT get_order refresh order_id=%s user_id=%s status=%s",
-                        order_id,
-                        user_id,
-                        (row.get("status") or ""),
-                    )
-                    self._refresh_order_in_tx(cur, row)
-                    db.commit()
-                    # re-read
+            if not row:
+                return False, "order_not_found", {}
+
+            # Step 2: optionally do chain check OUTSIDE the DB txn.  TronGrid HTTP
+            # can take tens of seconds; holding a pool connection while waiting on
+            # the network is what used to produce `idle in transaction` and
+            # `skipping vacuum --- lock not available` on qd_usdt_orders.
+            if refresh:
+                logger.info(
+                    "USDT get_order refresh order_id=%s user_id=%s status=%s",
+                    order_id,
+                    user_id,
+                    (row.get("status") or ""),
+                )
+                try:
+                    self._refresh_one_order_out_of_tx(row)
+                except Exception as e:
+                    logger.warning(f"get_order refresh (out-of-tx) failed order_id={order_id}: {e}")
+
+                # Step 3: short read txn to return fresh state
+                with get_db_connection() as db:
+                    cur = db.cursor()
                     cur.execute(
                         """
                         SELECT id, user_id, plan, chain, amount_usdt, address_index, address, status, tx_hash,
@@ -213,8 +237,7 @@ class UsdtPaymentService:
                         (order_id, user_id),
                     )
                     row = cur.fetchone()
-
-                cur.close()
+                    cur.close()
 
             return True, "success", self._row_to_dict(row)
         except Exception as e:
@@ -515,17 +538,21 @@ class UsdtPaymentService:
     def refresh_all_active_orders(self) -> int:
         """
         Scan all pending/paid USDT orders and refresh their chain status.
-        Called by the background UsdtOrderWorker.
 
-        Returns the number of orders that were updated to 'confirmed' or 'expired'.
+        Each order is checked with a short read txn, then the HTTP call to
+        TronGrid is performed OUTSIDE of any DB transaction, and final updates
+        are applied in short write txns.  This keeps pool connections from
+        sitting `idle in transaction` while TronGrid is slow/unreachable.
+
+        Returns the number of orders whose status changed.
         """
         updated = 0
         cfg = self._get_cfg()
         try:
+            # Load candidate rows in one short read txn and release the connection.
             with get_db_connection() as db:
                 cur = db.cursor()
                 self._ensure_schema_best_effort(cur)
-
                 cur.execute(
                     """
                     SELECT id, user_id, plan, chain, amount_usdt, address_index, address, status, tx_hash,
@@ -537,37 +564,179 @@ class UsdtPaymentService:
                     """
                 )
                 rows = cur.fetchall() or []
-                logger.info(
-                    "USDT reconcile batch start rows=%s debug_log=%s pay_enabled=%s",
-                    len(rows),
-                    cfg.get("debug_reconcile_log"),
-                    cfg.get("enabled"),
-                )
-
-                for row in rows:
-                    old_status = (row.get("status") or "").lower()
-                    try:
-                        self._refresh_order_in_tx(cur, row)
-                    except Exception as e:
-                        logger.debug(f"refresh_all: order {row.get('id')} error: {e}")
-                        continue
-
-                    # Check if status changed
-                    try:
-                        cur.execute("SELECT status FROM qd_usdt_orders WHERE id = ?", (row["id"],))
-                        new_row = cur.fetchone()
-                        new_status = (new_row.get("status") or "").lower() if new_row else old_status
-                        if new_status != old_status:
-                            updated += 1
-                            logger.info(f"USDT order {row['id']}: {old_status} -> {new_status}")
-                    except Exception:
-                        pass
-
-                db.commit()
                 cur.close()
+
+            logger.info(
+                "USDT reconcile batch start rows=%s debug_log=%s pay_enabled=%s",
+                len(rows),
+                cfg.get("debug_reconcile_log"),
+                cfg.get("enabled"),
+            )
+
+            for row in rows:
+                order_id = row.get("id")
+                old_status = (row.get("status") or "").lower()
+                try:
+                    self._refresh_one_order_out_of_tx(row)
+                except Exception as e:
+                    logger.debug(f"refresh_all: order {order_id} error: {e}")
+                    continue
+
+                # Check if status changed (short read, new connection)
+                try:
+                    with get_db_connection() as db:
+                        cur = db.cursor()
+                        cur.execute("SELECT status FROM qd_usdt_orders WHERE id = ?", (order_id,))
+                        new_row = cur.fetchone()
+                        cur.close()
+                    new_status = (new_row.get("status") or "").lower() if new_row else old_status
+                    if new_status != old_status:
+                        updated += 1
+                        logger.info(f"USDT order {order_id}: {old_status} -> {new_status}")
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"refresh_all_active_orders error: {e}", exc_info=True)
         return updated
+
+    # -------------------- Out-of-transaction refresh helpers --------------------
+
+    def _refresh_one_order_out_of_tx(self, row: Dict[str, Any]) -> None:
+        """Refresh a single order.  HTTP is done here; DB writes are in short
+        txns only.  Never hold a DB connection while calling TronGrid.
+        """
+        cfg = self._get_cfg()
+        status = (row.get("status") or "").lower()
+        chain = (row.get("chain") or "").upper()
+        order_id = row.get("id")
+        now = datetime.now(timezone.utc)
+
+        if chain != "TRC20":
+            logger.debug("USDT refresh skip order_id=%s reason=unsupported_chain chain=%s", order_id, chain)
+            return
+        if status not in ("pending", "paid", "expired"):
+            return
+
+        address = row.get("address") or ""
+        amount = Decimal(str(row.get("amount_usdt") or 0))
+        if not address or amount <= 0:
+            return
+
+        # 'paid' just waits for confirm delay; no HTTP needed
+        if status == "paid":
+            confirm_sec = int(cfg.get("confirm_seconds") or 30)
+            paid_at = self._coerce_utc_datetime(row.get("paid_at"))
+            ready = False
+            if paid_at and (now - paid_at).total_seconds() >= confirm_sec:
+                ready = True
+            elif not paid_at and confirm_sec <= 0:
+                ready = True
+            if ready:
+                self._confirm_and_activate_short_tx(
+                    order_id, row.get("user_id"), row.get("plan"), row.get("tx_hash") or ""
+                )
+            return
+
+        # pending / expired: TronGrid HTTP *outside* any DB txn
+        tx, chain_note = self._find_trc20_usdt_incoming(address, amount, row.get("created_at"))
+
+        if not tx and chain_note and (
+            chain_note.startswith("trongrid_http=") or chain_note.startswith("trongrid_request_error:")
+        ):
+            logger.warning(
+                "USDT reconcile TronGrid error order_id=%s user_id=%s %s",
+                order_id, row.get("user_id"), chain_note,
+            )
+        if cfg.get("debug_reconcile_log"):
+            logger.info(
+                "USDT reconcile scan order_id=%s user_id=%s status=%s amount=%s addr=%s expires_at=%s note=%s",
+                order_id,
+                row.get("user_id"),
+                status,
+                amount,
+                address,
+                row.get("expires_at"),
+                chain_note if not tx else f"matched_tx={tx.get('transaction_id')}",
+            )
+
+        if tx:
+            tx_hash = tx.get("transaction_id") or ""
+            paid_at = datetime.now(timezone.utc)
+            # Short write txn: mark paid
+            try:
+                with get_db_connection() as db:
+                    cur = db.cursor()
+                    cur.execute(
+                        "UPDATE qd_usdt_orders SET status = 'paid', tx_hash = ?, paid_at = ?, updated_at = NOW() "
+                        "WHERE id = ? AND status IN ('pending','expired')",
+                        (tx_hash, paid_at, order_id),
+                    )
+                    db.commit()
+                    cur.close()
+            except Exception as e:
+                logger.error(f"USDT mark_paid UPDATE failed order_id={order_id}: {e}")
+                return
+
+            confirm_sec = int(cfg.get("confirm_seconds") or 30)
+            try:
+                tx_ts = tx.get("block_timestamp")
+                if tx_ts:
+                    tx_time = datetime.fromtimestamp(int(tx_ts) / 1000.0, tz=timezone.utc)
+                    if (now - tx_time).total_seconds() >= confirm_sec:
+                        self._confirm_and_activate_short_tx(order_id, row.get("user_id"), row.get("plan"), tx_hash)
+                elif confirm_sec <= 0:
+                    self._confirm_and_activate_short_tx(order_id, row.get("user_id"), row.get("plan"), tx_hash)
+            except Exception:
+                pass
+            return
+
+        # No matching transfer yet: pending can transition to expired
+        if status == "pending":
+            exp = self._coerce_utc_datetime(row.get("expires_at"))
+            if exp is not None and exp <= now:
+                try:
+                    with get_db_connection() as db:
+                        cur = db.cursor()
+                        cur.execute(
+                            "UPDATE qd_usdt_orders SET status = 'expired', updated_at = NOW() "
+                            "WHERE id = ? AND status = 'pending'",
+                            (order_id,),
+                        )
+                        db.commit()
+                        cur.close()
+                except Exception as e:
+                    logger.warning(f"USDT mark_expired UPDATE failed order_id={order_id}: {e}")
+
+    def _confirm_and_activate_short_tx(self, order_id: int, user_id: int, plan: str, tx_hash: str) -> None:
+        """Idempotently mark confirmed in a short txn, then activate membership
+        (which opens its own DB connection).  Never does HTTP inside a txn.
+        """
+        try:
+            with get_db_connection() as db:
+                cur = db.cursor()
+                cur.execute("SELECT status FROM qd_usdt_orders WHERE id = ?", (order_id,))
+                current = cur.fetchone()
+                if current and (current.get("status") or "").lower() == "confirmed":
+                    cur.close()
+                    return
+                cur.execute(
+                    "UPDATE qd_usdt_orders SET status='confirmed', confirmed_at = NOW(), updated_at = NOW() "
+                    "WHERE id = ? AND status IN ('paid','pending')",
+                    (order_id,),
+                )
+                db.commit()
+                cur.close()
+        except Exception as e:
+            logger.error(f"USDT confirm UPDATE failed order_id={order_id}: {e}")
+            return
+
+        # Membership activation opens its own connection; keep it outside the
+        # confirm-txn above.
+        try:
+            ok, msg, _ = self.billing.purchase_membership(int(user_id), str(plan))
+            logger.info(f"USDT activate membership: order={order_id} user={user_id} plan={plan} ok={ok} msg={msg}")
+        except Exception as e:
+            logger.error(f"USDT activate membership failed: order={order_id} err={e}", exc_info=True)
 
 
 # ==================== Background Worker ====================
