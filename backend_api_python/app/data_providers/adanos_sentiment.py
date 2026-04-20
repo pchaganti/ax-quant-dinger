@@ -57,7 +57,7 @@ def normalize_source(source: Optional[str]) -> str:
     if normalized == "twitter":
         normalized = "x"
     if normalized not in SUPPORTED_SOURCES:
-        raise ValueError(f"Unsupported Adanos sentiment source: {source}")
+        raise ValueError(f"Unsupported Adanos sentiment source: {normalized!r}")
     return normalized
 
 
