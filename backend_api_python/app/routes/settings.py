@@ -759,7 +759,7 @@ CONFIG_SCHEMA = {
                 'label': 'Monthly Membership Price (USD)',
                 'type': 'number',
                 'default': '19.9',
-                'description': 'Monthly membership price in USD (mock payment in current version)'
+                'description': 'Monthly membership price in USD (USDT checkout uses equivalent amount in USDT)'
             },
             {
                 'key': 'MEMBERSHIP_MONTHLY_CREDITS',
@@ -773,7 +773,7 @@ CONFIG_SCHEMA = {
                 'label': 'Yearly Membership Price (USD)',
                 'type': 'number',
                 'default': '199',
-                'description': 'Yearly membership price in USD (mock payment in current version)'
+                'description': 'Yearly membership price in USD (USDT checkout uses equivalent amount in USDT)'
             },
             {
                 'key': 'MEMBERSHIP_YEARLY_CREDITS',
@@ -787,7 +787,7 @@ CONFIG_SCHEMA = {
                 'label': 'Lifetime Membership Price (USD)',
                 'type': 'number',
                 'default': '499',
-                'description': 'Lifetime membership price in USD (mock payment in current version)'
+                'description': 'Lifetime membership price in USD (USDT checkout uses equivalent amount in USDT)'
             },
             {
                 'key': 'MEMBERSHIP_LIFETIME_MONTHLY_CREDITS',

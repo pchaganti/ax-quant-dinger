@@ -1,9 +1,8 @@
 """
-Billing APIs - 会员购买/套餐配置（Mock支付）
+Billing APIs - 会员套餐与 USDT 支付
 
-当前版本先实现“快速商业闭环”的最小可用：
-- 从系统设置(.env)读取 3 档会员（包月/包年/永久）金额与赠送积分配置
-- 用户在前端购买后立即开通/发放积分（后续可替换为真实支付网关）
+- 套餐金额/积分从系统设置（.env）读取
+- 会员开通仅通过 USDT 链上支付确认后触发（见 usdt_payment_service）
 """
 
 from flask import Blueprint, jsonify, request, g
@@ -37,25 +36,15 @@ def get_membership_plans():
 @login_required
 def purchase_membership():
     """
-    Purchase membership (mock: immediate activation).
-
-    Body:
-      { plan: "monthly" | "yearly" | "lifetime" }
+    Legacy mock checkout (disabled). Use POST /billing/usdt/create and pay on-chain.
     """
-    try:
-        user_id = getattr(g, "user_id", None)
-        data = request.get_json() or {}
-        plan = (data.get("plan") or "").strip().lower()
-        if not plan:
-            return jsonify({"code": 0, "msg": "missing_plan", "data": None}), 400
-
-        success, msg, out = get_billing_service().purchase_membership(user_id, plan)
-        if success:
-            return jsonify({"code": 1, "msg": msg, "data": out})
-        return jsonify({"code": 0, "msg": msg, "data": out}), 400
-    except Exception as e:
-        logger.error(f"purchase_membership failed: {e}", exc_info=True)
-        return jsonify({"code": 0, "msg": str(e), "data": None}), 500
+    return jsonify(
+        {
+            "code": 0,
+            "msg": "mock_purchase_disabled",
+            "data": {"hint": "Use USDT: POST /api/billing/usdt/create then pay to the assigned address."},
+        }
+    ), 403
 
 
 # =========================

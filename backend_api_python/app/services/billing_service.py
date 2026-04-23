@@ -199,11 +199,19 @@ class BillingService:
             },
         }
 
-    def purchase_membership(self, user_id: int, plan: str) -> Tuple[bool, str, Dict[str, Any]]:
+    def purchase_membership(
+        self,
+        user_id: int,
+        plan: str,
+        *,
+        record_membership_order: bool = True,
+        fulfillment_ref: str = "",
+    ) -> Tuple[bool, str, Dict[str, Any]]:
         """
-        Purchase membership plan (mock payment: immediately activates).
+        Activate membership (VIP dates + bonus credits).
 
-        NOTE: Real payment gateway can be integrated later; this function is the single activation point.
+        When ``record_membership_order`` is True (legacy), inserts a row into ``qd_membership_orders``.
+        USDT checkout sets it False so only ``qd_usdt_orders`` represents paid orders.
         """
         plan = (plan or "").strip().lower()
         plans = self.get_membership_plans()
@@ -214,7 +222,8 @@ class BillingService:
             with get_db_connection() as db:
                 cur = db.cursor()
                 self._ensure_membership_schema_best_effort(cur)
-                self._ensure_membership_orders_table_best_effort(cur)
+                if record_membership_order:
+                    self._ensure_membership_orders_table_best_effort(cur)
 
                 now = datetime.now(timezone.utc)
 
@@ -244,34 +253,36 @@ class BillingService:
                     vip_expires_at = now + timedelta(days=365 * 100)
                     vip_is_lifetime = True
 
-                # Create order record (mock paid)
                 order_plan = plan
                 order_price_usd = float(plans[plan].get("price_usd") or 0)
                 order_id = None
-                try:
-                    cur.execute(
-                        """
-                        INSERT INTO qd_membership_orders
-                          (user_id, plan, price_usd, status, created_at, paid_at)
-                        VALUES (?, ?, ?, 'paid', NOW(), NOW())
-                        RETURNING id
-                        """,
-                        (user_id, order_plan, order_price_usd),
-                    )
-                    row2 = cur.fetchone() or {}
-                    order_id = row2.get("id")
-                except Exception:
-                    # Fallback for DB drivers without RETURNING support
-                    cur.execute(
-                        """
-                        INSERT INTO qd_membership_orders
-                          (user_id, plan, price_usd, status, created_at, paid_at)
-                        VALUES (?, ?, ?, 'paid', NOW(), NOW())
-                        """,
-                        (user_id, order_plan, order_price_usd),
-                    )
-                    order_id = getattr(cur, "lastrowid", None)
-                order_ref = str(order_id or "")
+                if record_membership_order:
+                    try:
+                        cur.execute(
+                            """
+                            INSERT INTO qd_membership_orders
+                              (user_id, plan, price_usd, status, created_at, paid_at)
+                            VALUES (?, ?, ?, 'paid', NOW(), NOW())
+                            RETURNING id
+                            """,
+                            (user_id, order_plan, order_price_usd),
+                        )
+                        row2 = cur.fetchone() or {}
+                        order_id = row2.get("id")
+                    except Exception:
+                        cur.execute(
+                            """
+                            INSERT INTO qd_membership_orders
+                              (user_id, plan, price_usd, status, created_at, paid_at)
+                            VALUES (?, ?, ?, 'paid', NOW(), NOW())
+                            """,
+                            (user_id, order_plan, order_price_usd),
+                        )
+                        order_id = getattr(cur, "lastrowid", None)
+                    order_ref = str(order_id or "")
+                else:
+                    ref = (fulfillment_ref or "").strip()
+                    order_ref = ref if ref else f"usdt:{user_id}:{int(now.timestamp())}"
 
                 # Update user VIP fields
                 cur.execute(
@@ -345,7 +356,7 @@ class BillingService:
             pass
 
     def _ensure_membership_orders_table_best_effort(self, cur):
-        """Best-effort create membership orders table (mock payment)."""
+        """Best-effort create membership orders table (legacy; optional row per mock checkout)."""
         try:
             cur.execute(
                 """

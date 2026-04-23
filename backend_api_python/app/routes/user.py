@@ -1481,7 +1481,7 @@ def get_system_strategies():
 def get_admin_orders():
     """
     Get all orders across the system (admin only).
-    Merges qd_membership_orders and qd_usdt_orders into a unified list.
+    Lists USDT on-chain membership orders only (qd_usdt_orders).
 
     Query params:
         page: int (default 1)
@@ -1500,7 +1500,6 @@ def get_admin_orders():
         with get_db_connection() as db:
             cur = db.cursor()
 
-            # --- USDT Orders (primary) ---
             usdt_conditions = []
             usdt_params = []
 
@@ -1517,93 +1516,39 @@ def get_admin_orders():
             if usdt_conditions:
                 usdt_where = "WHERE " + " AND ".join(usdt_conditions)
 
-            # Count
             cur.execute(
                 f"SELECT COUNT(*) as cnt FROM qd_usdt_orders o LEFT JOIN qd_users u ON u.id = o.user_id {usdt_where}",
                 tuple(usdt_params)
             )
-            usdt_total = cur.fetchone()['cnt']
+            total = cur.fetchone()['cnt']
 
-            # --- Membership Orders (mock) ---
-            mock_conditions = []
-            mock_params = []
-
-            if status_filter and status_filter != 'all':
-                mock_conditions.append("m.status = ?")
-                mock_params.append(status_filter)
-
-            if search:
-                mock_conditions.append("(u.username ILIKE ? OR u.email ILIKE ? OR u.nickname ILIKE ?)")
-                like_val = f"%{search}%"
-                mock_params.extend([like_val, like_val, like_val])
-
-            mock_where = ""
-            if mock_conditions:
-                mock_where = "WHERE " + " AND ".join(mock_conditions)
-
-            cur.execute(
-                f"SELECT COUNT(*) as cnt FROM qd_membership_orders m LEFT JOIN qd_users u ON u.id = m.user_id {mock_where}",
-                tuple(mock_params)
-            )
-            mock_total = cur.fetchone()['cnt']
-
-            total = usdt_total + mock_total
-
-            # Use UNION ALL to merge both tables into one sorted list
-            # We select a unified schema
-            union_sql = f"""
-                SELECT * FROM (
-                    SELECT
-                        o.id,
-                        'usdt' AS order_type,
-                        o.user_id,
-                        u.username,
-                        u.nickname,
-                        u.email AS user_email,
-                        o.plan,
-                        o.amount_usdt AS amount,
-                        'USDT' AS currency,
-                        o.chain,
-                        o.address,
-                        o.tx_hash,
-                        o.status,
-                        o.created_at,
-                        o.paid_at,
-                        o.confirmed_at,
-                        o.expires_at
-                    FROM qd_usdt_orders o
-                    LEFT JOIN qd_users u ON u.id = o.user_id
-                    {usdt_where}
-
-                    UNION ALL
-
-                    SELECT
-                        m.id,
-                        'mock' AS order_type,
-                        m.user_id,
-                        u.username,
-                        u.nickname,
-                        u.email AS user_email,
-                        m.plan,
-                        m.price_usd AS amount,
-                        'USD' AS currency,
-                        '' AS chain,
-                        '' AS address,
-                        '' AS tx_hash,
-                        m.status,
-                        m.created_at,
-                        m.paid_at,
-                        NULL AS confirmed_at,
-                        NULL AS expires_at
-                    FROM qd_membership_orders m
-                    LEFT JOIN qd_users u ON u.id = m.user_id
-                    {mock_where}
-                ) AS combined
-                ORDER BY combined.created_at DESC
+            list_sql = f"""
+                SELECT
+                    o.id,
+                    'usdt' AS order_type,
+                    o.user_id,
+                    u.username,
+                    u.nickname,
+                    u.email AS user_email,
+                    o.plan,
+                    o.amount_usdt AS amount,
+                    'USDT' AS currency,
+                    o.chain,
+                    o.address,
+                    o.tx_hash,
+                    o.status,
+                    o.created_at,
+                    o.paid_at,
+                    o.confirmed_at,
+                    o.expires_at
+                FROM qd_usdt_orders o
+                LEFT JOIN qd_users u ON u.id = o.user_id
+                {usdt_where}
+                ORDER BY o.created_at DESC
                 LIMIT ? OFFSET ?
             """
-            all_params = list(usdt_params) + list(mock_params) + [page_size, offset]
-            cur.execute(union_sql, tuple(all_params))
+            all_params = list(usdt_params) + [page_size, offset]
+            cur.execute(list_sql, tuple(all_params))
             rows = cur.fetchall() or []
 
             # Summary stats

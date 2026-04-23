@@ -412,7 +412,12 @@ class UsdtPaymentService:
         )
         # Activate membership
         try:
-            ok, msg, data = self.billing.purchase_membership(int(user_id), str(plan))
+            ok, msg, data = self.billing.purchase_membership(
+                int(user_id),
+                str(plan),
+                record_membership_order=False,
+                fulfillment_ref=f"usdt_order:{order_id}",
+            )
             logger.info(f"USDT activate membership: order={order_id} user={user_id} plan={plan} ok={ok} msg={msg}")
         except Exception as e:
             logger.error(f"USDT activate membership failed: order={order_id} err={e}", exc_info=True)
@@ -733,7 +738,12 @@ class UsdtPaymentService:
         # Membership activation opens its own connection; keep it outside the
         # confirm-txn above.
         try:
-            ok, msg, _ = self.billing.purchase_membership(int(user_id), str(plan))
+            ok, msg, _ = self.billing.purchase_membership(
+                int(user_id),
+                str(plan),
+                record_membership_order=False,
+                fulfillment_ref=f"usdt_order:{order_id}",
+            )
             logger.info(f"USDT activate membership: order={order_id} user={user_id} plan={plan} ok={ok} msg={msg}")
         except Exception as e:
             logger.error(f"USDT activate membership failed: order={order_id} err={e}", exc_info=True)
