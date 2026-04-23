@@ -430,7 +430,12 @@ class LLMService:
                 raise ValueError(f"API key not configured for provider: {p.value}. Please configure at least one LLM provider API key.")
         
         base_url = self.get_base_url(p)
-        
+        if p == LLMProvider.CUSTOM and not (base_url or "").strip():
+            raise ValueError(
+                "Custom LLM base URL 未配置：请在后台设置或 .env 中填写 CUSTOM_API_URL "
+                "（须为 OpenAI 兼容网关的根地址，例如 https://api.example.com/v1）。"
+            )
+
         # Normalize model name for the provider
         original_model = model
         model = self._normalize_model_for_provider(model, p)
