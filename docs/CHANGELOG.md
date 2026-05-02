@@ -4,6 +4,257 @@ This document records version updates, new features, bug fixes, and database mig
 
 ---
 
+## V3.1.0 (2026-05-02) — AI Agent Gateway / MCP HTTP / SSE 进度流 / Admin UI
+
+把 QuantDinger 从「只服务人类用户的 Web 产品」扩展成「同时面向人类和 AI Agent 的两栈产品」。给 OpenClaw / NanoBot / Claude Code / Cursor / Codex 这类 Agent 运行时配齐了：受控的 HTTP 网关、按 Scope 的细粒度授权、异步任务 + 实时进度、MCP 接入、Admin 后台运维面板，以及一份机器可读的契约（OpenAPI 3.0）。**所有 Agent 入口默认拒绝实盘交易**——T 类（Trading）即便给到 Agent，也走纸面订单簿，需要管理员显式开启服务器级开关后才可能走真实交易所。
+
+### 🚀 New Features
+
+#### Agent Gateway（`/api/agent/v1`）
+全新的、与人类 JWT 完全隔离的机器对机器 API：
+- **Token 模型**：管理员一次性签发 `qd_agent_xxxx` 令牌，存库时只保留 SHA-256 哈希；支持自定义 scopes (`R / W / B / N / C / T`)、市场白名单、品种白名单、`paper_only`、速率上限、过期时间。
+- **Capability Classes**：每个端点声明唯一一个 risk class —— **R**(Read) / **W**(Workspace write) / **B**(Backtest) / **N**(Notify) / **C**(Credentials, admin only) / **T**(Trading, paper-only by default)。
+- **审计日志**：每一次 Agent 调用（成功、被拒、429）都追加到 `qd_agent_audit`，含路由、scope class、状态码、耗时与脱敏后的请求/响应摘要。
+- **速率限制 + 幂等**：基于 token 的进程内滑动窗口；W/B/T 类支持 `Idempotency-Key` 头，重复 key 直接返回原始 job，不再重复执行。
+- **异步任务**：长任务（回测、实验流水线、AI 优化）通过进程内 `ThreadPoolExecutor` 入队，写入 `qd_agent_jobs`，客户端走「提交 → 轮询 / SSE」模式；workers 数和实盘开关都走 env 控制。
+- **Tenant 隔离**：`token → user_id → 资源`；任何 Agent 都看不到其他用户的策略、订单、审计或任务。
+
+实现的端点（与 `docs/agent/agent-openapi.json` 一一对应）：
+| 类别 | 路径 | Class | 说明 |
+|---|---|---|---|
+| Health | `GET /health` · `GET /whoami` | – / R | 公开存活 / token 自省 |
+| Markets | `GET /markets` · `/markets/{m}/symbols` · `/klines` · `/price` | R | 行情 |
+| Strategies | `GET /strategies` · `GET/POST/PATCH /strategies/{id}` | R / W | 状态切到 `running` 需 T |
+| Backtests | `POST /backtests` | B | 异步，返回 `job_id` |
+| Experiments | `POST /experiments/{regime/detect, pipeline, structured-tune, ai-optimize}` | B | regime 同步、其余异步 |
+| Jobs | `GET /jobs` · `GET /jobs/{id}` · `GET /jobs/{id}/stream` | R | 列表 / 单查 / **SSE 实时流** |
+| Portfolio | `GET /portfolio/positions` · `/portfolio/paper-orders` | R | 持仓 / 纸面成交 |
+| Quick-Trade | `POST /quick-trade/orders` · `POST /quick-trade/kill-switch` | T | 默认走纸面簿 |
+| Admin | `POST/GET /admin/tokens` · `DELETE /admin/tokens/{id}` · `GET /admin/audit` | – | 仅人类 JWT |
+
+#### SSE 实时进度（`GET /api/agent/v1/jobs/{id}/stream`）
+长任务（`ai-optimize` / `structured-tune` / 多轮回测流水线）现在能让 LLM 客户端「边跑边看」：
+- 帧类型：`snapshot`（首帧给基线）→ `progress`（每次 runner `on_progress` 触发）→ `ping`（~15s 心跳，防代理掐线）→ `result`（终态后立刻收尾）。
+- 断点续传：`?since=<seq>` 或标准 `Last-Event-ID` 头。
+- 任务已结束时直接给 `snapshot + result` 后关闭，客户端无需写两套逻辑。
+- Runner 接入约定：`runner(payload, on_progress)` 第二参数自动被探测到，事件同时投递给 SSE 订阅者并写入 `qd_agent_jobs.progress` JSONB（断线重连可读取最新快照）。
+
+#### MCP Server（`mcp_server/`）
+独立 Python 包，把 Agent Gateway 的 R / B 子集包成 Model Context Protocol 工具：
+- 三种 transport，由环境变量 `QUANTDINGER_MCP_TRANSPORT` 选：
+  - `stdio`（默认）—— 桌面 IDE（Cursor / Claude Code）以子进程启动
+  - `sse` —— 仅支持 SSE 的客户端
+  - `streamable-http` —— 新版 MCP HTTP 协议，云端 Agent / 远程 IDE 直连
+- HTTP 模式额外读 `QUANTDINGER_MCP_HOST` / `QUANTDINGER_MCP_PORT`。
+- 永远只接 Agent token，**绝不要写人类 JWT 或交易所 Key**。
+
+#### 前端 Admin UI：Agent Tokens 面板（仅 admin）
+集成进现有 Vue 后台（与「用户管理」「系统设置」并列）：
+- 路由 `/agent-tokens`，权限 `permission: ['admin']`。
+- **Tokens 标签**：列表（含彩色 scope tag、market 白名单、paper-only / live-eligible 状态、最后使用时间）+ 撤销按钮。
+- **签发弹窗**：scope 多选、市场/品种白名单、速率、过期天数、`paper_only` 开关；勾 T 但关 paper-only 时给红色警告提示需要服务器端 `AGENT_LIVE_TRADING_ENABLED=true`。
+- **Reveal 弹窗**：完整 token **只显示一次**，自带复制到剪贴板。
+- **Audit 标签**：method / route / scope class / status / 耗时；status 用色阶（5xx 红、429 橙、4xx 火、2xx 绿）。
+- i18n：`en-US` + `zh-CN` 各加约 30 个 `agentTokens.*` key，其它语言走英文 fallback。
+
+#### 系统架构图
+README 顶部插入了一张端到端架构图（`docs/screenshots/architecture.png`），中英两份 README 同步。
+
+### 🛠️ Tooling / Docs
+
+- `docs/agent/AGENT_ENVIRONMENT_DESIGN.md` —— 三层契约（Documentation → Command → Machine Interface）总览，约束 Cursor / Claude Code / Codex 这类**写代码**的 Agent。
+- `docs/agent/AI_INTEGRATION_DESIGN.md` —— 把 QuantDinger 当**产品**消费的 Agent 设计文档（personas、capability classes、安全、Roadmap、实施进度表）。当前进到 v0.3。
+- `docs/agent/AGENT_QUICKSTART.md` —— 操作手册：从签 token、`/whoami`、读行情、跑回测、SSE 监听到 MCP 接入的逐步 `curl` 例子。
+- `docs/agent/agent-openapi.json` —— OpenAPI 3.0 契约，含所有 `/api/agent/v1/...` 路径 + `x-scope-class` 自定义扩展。
+- `.cursor/skills/quantdinger-agent-workflow/SKILL.md` —— 给 Cursor / Claude Code 用的 Skill，告诉 Agent 在本仓库改代码时的红线、入口、验证方式。
+- `mcp_server/README.md` —— MCP 三种 transport 的部署示例。
+
+### ⚙️ Configuration
+
+新增（全部可选）环境变量，默认即安全：
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `AGENT_JOBS_MAX_WORKERS` | `4` | Agent 异步任务线程池大小 |
+| `AGENT_LIVE_TRADING_ENABLED` | `false` | **服务器级实盘开关**。即使某个 token `paper_only=false`，没开这个开关也只走纸面 |
+| `QUANTDINGER_MCP_TRANSPORT` | `stdio` | MCP 客户端连接方式 (`stdio` / `sse` / `streamable-http`) |
+| `QUANTDINGER_MCP_HOST` | `127.0.0.1` | MCP HTTP 模式 bind host |
+| `QUANTDINGER_MCP_PORT` | `8000` | MCP HTTP 模式 bind port |
+
+### ✅ Tests
+
+- `backend_api_python/tests/test_agent_v1.py` —— 9 个用例：缺 token / 未知 token / inactive / expired token / scope 不足 / 速率限制 / token 生成格式等。
+- `backend_api_python/tests/test_agent_jobs_progress.py` —— 5 个用例：runner 签名探测、有序累积、`since_seq` 续传、idle 超时、跨线程实时投递。
+- `mcp_server/tests/test_transport_resolution.py` —— 4 个用例：默认 transport、别名解析、未知值优雅退出、HTTP settings shim。安装 `mcp` 包后才会跑，否则 `importorskip` 跳过。
+
+后端跑出 **58 passed**（53 个 Gateway 测试 + 5 个 SSE 测试）。
+
+### 🗄️ Database Migration
+
+本版新增 4 张表 + 1 个 JSONB 列，全部由 `agent_auth._ensure_schema` 在第一次接到 Agent 请求时**自动幂等创建**，所以**已运行的部署什么都不做也能正常用**。但建议在升级时统一显式执行下面的 SQL，确保索引齐全：
+
+```sql
+-- ============================================================
+-- QuantDinger V3.1.0 Database Migration
+-- Agent Gateway: tokens / async jobs / audit / paper orders
+-- ============================================================
+
+-- 1. Agent tokens (one row per issued token; only the SHA-256 hash is stored)
+CREATE TABLE IF NOT EXISTS qd_agent_tokens (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
+    name VARCHAR(80) NOT NULL,
+    token_prefix VARCHAR(24) NOT NULL,
+    token_hash VARCHAR(128) NOT NULL,
+    scopes TEXT NOT NULL DEFAULT 'R',
+    markets TEXT NOT NULL DEFAULT '*',
+    instruments TEXT NOT NULL DEFAULT '*',
+    paper_only BOOLEAN NOT NULL DEFAULT TRUE,
+    rate_limit_per_min INTEGER NOT NULL DEFAULT 60,
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMP,
+    last_used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tokens_hash   ON qd_agent_tokens(token_hash);
+CREATE INDEX        IF NOT EXISTS idx_agent_tokens_user   ON qd_agent_tokens(user_id);
+CREATE INDEX        IF NOT EXISTS idx_agent_tokens_status ON qd_agent_tokens(status);
+
+-- 2. Agent async jobs (backtests / experiments / ai-optimize / ...)
+CREATE TABLE IF NOT EXISTS qd_agent_jobs (
+    id BIGSERIAL PRIMARY KEY,
+    job_id VARCHAR(40) NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
+    agent_token_id INTEGER REFERENCES qd_agent_tokens(id) ON DELETE SET NULL,
+    kind VARCHAR(40) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'queued',
+    request JSONB NOT NULL DEFAULT '{}'::jsonb,
+    result JSONB,
+    error TEXT,
+    progress JSONB,                      -- NEW in V3.1.0: latest snapshot for SSE cold reconnects
+    idempotency_key VARCHAR(120),
+    created_at TIMESTAMP DEFAULT NOW(),
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP
+);
+-- Safe to run even if the table existed (e.g. _ensure_schema already created
+-- the V3.0 shape without `progress`):
+ALTER TABLE qd_agent_jobs ADD COLUMN IF NOT EXISTS progress JSONB;
+
+CREATE INDEX        IF NOT EXISTS idx_agent_jobs_user   ON qd_agent_jobs(user_id);
+CREATE INDEX        IF NOT EXISTS idx_agent_jobs_status ON qd_agent_jobs(status);
+CREATE INDEX        IF NOT EXISTS idx_agent_jobs_kind   ON qd_agent_jobs(kind);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_jobs_idem
+    ON qd_agent_jobs(agent_token_id, kind, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+-- 3. Append-only audit log (every agent call, including denials)
+CREATE TABLE IF NOT EXISTS qd_agent_audit (
+    id BIGSERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    agent_token_id INTEGER,
+    agent_name VARCHAR(80),
+    route VARCHAR(160) NOT NULL,
+    method VARCHAR(8) NOT NULL,
+    scope_class VARCHAR(4) NOT NULL,
+    status_code INTEGER NOT NULL,
+    idempotency_key VARCHAR(120),
+    request_summary JSONB,               -- redacted by _redact() before insert
+    response_summary JSONB,
+    duration_ms INTEGER,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_audit_user  ON qd_agent_audit(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_audit_token ON qd_agent_audit(agent_token_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_audit_class ON qd_agent_audit(scope_class);
+
+-- 4. Paper-only ledger so T-class tokens can simulate without ever
+--    touching live exchange credentials.
+CREATE TABLE IF NOT EXISTS qd_agent_paper_orders (
+    id BIGSERIAL PRIMARY KEY,
+    order_uid VARCHAR(40) NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
+    agent_token_id INTEGER REFERENCES qd_agent_tokens(id) ON DELETE SET NULL,
+    market VARCHAR(40) NOT NULL,
+    symbol VARCHAR(60) NOT NULL,
+    side VARCHAR(8) NOT NULL,
+    order_type VARCHAR(16) NOT NULL DEFAULT 'market',
+    qty DECIMAL(28,10) NOT NULL,
+    limit_price DECIMAL(28,10),
+    fill_price DECIMAL(28,10),
+    fill_value DECIMAL(28,10),
+    status VARCHAR(16) NOT NULL DEFAULT 'filled',
+    note TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_paper_orders_user  ON qd_agent_paper_orders(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_paper_orders_token ON qd_agent_paper_orders(agent_token_id);
+
+DO $$ BEGIN RAISE NOTICE '✅ QuantDinger V3.1.0 agent gateway schema migration completed!'; END $$;
+```
+
+**Docker 一行示例：**
+
+```bash
+docker compose exec -T postgres psql -U quantdinger -d quantdinger \
+  -f /app/migrations/init.sql   # 全 idempotent，可重复执行
+```
+
+或者把上面的 SQL 单独存盘后：
+
+```bash
+docker cp /path/to/v3.1.0_agent_gateway.sql quantdinger-db:/tmp/migrate.sql
+docker compose exec -T postgres psql -U quantdinger -d quantdinger -f /tmp/migrate.sql
+```
+
+**Migration Notes：**
+- 所有语句都用了 `IF NOT EXISTS`，**重复执行安全**。
+- 不修改、不删除任何已有数据。
+- 没设置 `AGENT_LIVE_TRADING_ENABLED=true` 之前，T 类调用永远只写 `qd_agent_paper_orders`，不会触发 `TradingExecutor`。
+- 4 张表都按 `user_id` 做 tenant 隔离；删除用户会级联清理对应的 token / job / paper-order，audit 因为有可能要事后追责，是软关联（`agent_token_id INTEGER`，无外键级联）。
+
+### 📦 Files Changed
+
+**Backend (`backend_api_python/`):**
+- `migrations/init.sql` — 新增 Section 30「Agent Gateway」，4 张表 + `progress` JSONB 列 + 索引
+- `app/utils/agent_auth.py` — token 鉴权、scope/allowlist 校验、速率限制、`_audit + _redact`、`with_idempotency`、`_ensure_schema` 运行时建表
+- `app/utils/agent_jobs.py` — 异步 job runner、`on_progress` 探测、SSE 事件环（`deque(maxlen=200)` + `threading.Event`）、`stream_progress(...)` 生成器、`progress` 列持久化
+- `app/routes/agent_v1/__init__.py` + `_helpers.py` + `health.py` + `markets.py` + `strategies.py` + `backtests.py` + `experiments.py` + `jobs.py`(含 SSE) + `portfolio.py` + `quick_trade.py` + `admin.py`
+- `app/routes/__init__.py` — 注册 `agent_v1_bp`
+- `env.example` — 新增 `AGENT_JOBS_MAX_WORKERS`、`AGENT_LIVE_TRADING_ENABLED`
+- `tests/test_agent_v1.py`、`tests/test_agent_jobs_progress.py`
+
+**MCP server（新增包）：**
+- `mcp_server/pyproject.toml`、`mcp_server/README.md`
+- `mcp_server/src/quantdinger_mcp/{__init__.py, server.py}` — `FastMCP` + `httpx`，三种 transport via env
+- `mcp_server/tests/test_transport_resolution.py`
+
+**前端（`QuantDinger-Vue-src/` + 同步打包到 `frontend/dist/`）：**
+- `src/api/agent.js` — Agent admin API client
+- `src/views/agent-tokens/index.vue` — Tokens / Audit 双标签页面
+- `src/config/router.config.js` — 新路由 `/agent-tokens`，`permission: ['admin']`
+- `src/locales/lang/{en-US,zh-CN}.js` — `menu.agentTokens` + 约 30 个 `agentTokens.*` key
+- `frontend/dist/` — 重新打包并替换（101 个文件，约 18.9 MB；含 agent-tokens 路由代码与 zh-CN i18n）
+
+**文档：**
+- `docs/agent/AGENT_ENVIRONMENT_DESIGN.md`、`docs/agent/AI_INTEGRATION_DESIGN.md`（v0.3）、`docs/agent/AGENT_QUICKSTART.md`、`docs/agent/agent-openapi.json`、`docs/agent/README.md`
+- `.cursor/skills/quantdinger-agent-workflow/SKILL.md`
+- `README.md` + `docs/README_CN.md` — 顶部插入架构图 + 文档导航补充 Agent 相关链接
+- `docs/screenshots/architecture.png` — 端到端架构图
+
+### 🗑️ Removed
+
+- `.github/dependabot.yml` — 关闭 Dependabot，避免每周冒出 11 个噪音分支（大量 npm `vue-cli` v6 / webpack v5 升级会和当前 Vue 2 + webpack 4 链路硬冲）。
+
+### ⚠️ Operational notes
+
+1. **第一次启动可以不跑 SQL**：Agent Gateway 第一次接到请求时会自动建表（`_ensure_schema`）。但建议升级时统一执行上面的迁移以保证索引齐全。
+2. **实盘开关默认关**：`AGENT_LIVE_TRADING_ENABLED` 不设或非 `true`，T 类 token 即便配置了 `paper_only=false` 也只走 `qd_agent_paper_orders`。这是产品级红线，请勿在文档/代码里弱化。
+3. **签发的 token 不可恢复**：库里只存 SHA-256 hash，前端 reveal 弹窗关掉就找不回了，丢了只能撤销重签。
+4. **MCP HTTP 模式生产部署**：`streamable-http` 默认 bind 到 `127.0.0.1`，对外暴露请显式设 `QUANTDINGER_MCP_HOST=0.0.0.0` 并放到 nginx / 反代后面，**只让带 Agent token 的客户端访问**。
+
+---
+
 ## V3.0.2 (2026-04-11) — 多语言文件全量补齐(AI 自动翻译)
 
 ### 🌍 i18n
@@ -1093,6 +1344,7 @@ END $$;
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| V3.1.0 | 2026-05-02 | AI Agent Gateway (`/api/agent/v1`), MCP server with stdio/SSE/HTTP transports, SSE job progress streaming, Vue Admin UI for agent tokens & audit, paper-only-by-default trading safety, 4 new DB tables |
 | V2.2.2 | 2026-02-28 | Polymarket prediction markets integration, AI-driven prediction analysis, asset trading recommendations |
 | V2.2.1 | 2026-02-27 | Membership & Billing, USDT TRC20 payment, VIP free indicators, AI Trading Radar, simplified strategy creation |
 | V2.1.3 | 2026-02-XX | Cross-sectional strategy support |

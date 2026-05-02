@@ -57,6 +57,11 @@
 
 > QuantDinger is a **self-hosted, local-first** quantitative platform: **AI-assisted research**, **Python-native strategies**, **backtesting**, and **live trading** (crypto, IBKR stocks, MT5 forex) in one product—not a loose collection of scripts and SaaS tabs.
 
+<div align="center">
+  <img src="docs/screenshots/architecture.png" alt="QuantDinger system architecture: Data Sources → Indicator / Signal / Strategy / Backtesting / AI Analysis layers → Execution, with the closed-loop quant workflow (Idea → Indicator → Strategy → Backtest → Optimize → Execute → Monitor)" width="960">
+  <p><sub><em>End-to-end architecture: market data feeds the five-layer engine and exits to live execution, closing the quant loop from idea to monitoring.</em></sub></p>
+</div>
+
 ## Try in 2 minutes
 
 **Prerequisites:** [Docker](https://docs.docker.com/get-docker/) with Compose (Docker Desktop on Windows/macOS, or Docker Engine + Compose plugin on Linux), and **Git**. Node.js is **not** required (prebuilt UI is in `frontend/dist`).
@@ -622,6 +627,10 @@ Use `backend_api_python/env.example` as the primary template. Key areas include:
 | [Chinese Overview](docs/README_CN.md) | Chinese product overview |
 | [Multi-User Setup](docs/multi-user-setup.md) | PostgreSQL multi-user deployment |
 | [Cloud Deployment](docs/CLOUD_DEPLOYMENT_EN.md) | Domain, HTTPS, reverse proxy, and cloud rollout |
+| [Multi-agent environment design](docs/agent/AGENT_ENVIRONMENT_DESIGN.md) | How to structure the repo for Cursor, Claude Code, Codex, and similar coding agents (English) |
+| [AI / Agent integration design](docs/agent/AI_INTEGRATION_DESIGN.md) | Versioned Agent Gateway, scopes, MCP, and trading safety so QuantDinger can serve AI agents — not only humans (English) |
+| [Agent quickstart](docs/agent/AGENT_QUICKSTART.md) | Issue a token, call `/api/agent/v1`, run paper trades, integrate via MCP (English) |
+| [Agent OpenAPI](docs/agent/agent-openapi.json) | Machine-readable contract for the Agent Gateway |
 
 ### Strategy Development
 

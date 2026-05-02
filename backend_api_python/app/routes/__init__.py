@@ -51,3 +51,8 @@ def register_routes(app: Flask):
     app.register_blueprint(quick_trade_bp, url_prefix='/api/quick-trade')
     app.register_blueprint(polymarket_bp, url_prefix='/api/polymarket')
     app.register_blueprint(experiment_bp, url_prefix='/api/experiment')
+
+    # Agent Gateway (/api/agent/v1) — versioned, scoped surface for AI agents.
+    # See docs/agent/AI_INTEGRATION_DESIGN.md.
+    from app.routes.agent_v1 import register as register_agent_v1
+    register_agent_v1(app)

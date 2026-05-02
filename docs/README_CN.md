@@ -57,6 +57,11 @@
 
 > QuantDinger 是**可自托管、本地优先**的量化平台：把 **AI 辅助研究**、**Python 原生策略**、**回测** 与 **实盘**（加密货币、IBKR 美股、MT5 外汇）放在**同一套产品**里，而不是图表、脚本、机器人和面板各自为政。
 
+<div align="center">
+  <img src="screenshots/architecture.png" alt="QuantDinger 系统架构：行情数据 → 指标 / 信号 / 策略 / 回测 / AI 分析五层引擎 → 实盘执行，并闭合「想法 → 指标 → 策略 → 回测 → 优化 → 执行 → 监控」的量化工作流" width="960">
+  <p><sub><em>端到端架构：行情数据驱动五层引擎并对接实盘执行，从想法到监控闭环整套量化工作流。</em></sub></p>
+</div>
+
 ## 两分钟试用
 
 **前置条件：** 已安装带 Compose 的 [Docker](https://docs.docker.com/get-docker/)（Windows/macOS 用 Docker Desktop，Linux 用 Docker Engine + Compose 插件）以及 **Git**。**不需要安装 Node.js**（仓库已含 `frontend/dist` 预构建前端）。
@@ -609,6 +614,10 @@ QuantDinger/
 | [更新日志](CHANGELOG.md) | 版本历史与迁移说明 |
 | [多用户部署](multi-user-setup.md) | PostgreSQL 多用户部署说明 |
 | [云服务器部署](CLOUD_DEPLOYMENT_CN.md) | 域名、HTTPS、反向代理与云上部署 |
+| [Multi-agent environment design](agent/AGENT_ENVIRONMENT_DESIGN.md)（英文） | Cursor、Claude Code、Codex 等编码 Agent 的仓库约定与分层契约；正文为英文 |
+| [AI / Agent integration design](agent/AI_INTEGRATION_DESIGN.md)（英文） | 让 QuantDinger 既服务人类交易员，也服务外部 AI Agent：Agent 网关、权限范围、MCP 与交易安全；正文为英文 |
+| [Agent quickstart](agent/AGENT_QUICKSTART.md)（英文） | 落地实操：发 token、调 `/api/agent/v1`、跑纸面交易、接入 MCP |
+| [Agent OpenAPI](agent/agent-openapi.json) | Agent 网关的机器可读契约（OpenAPI 3.0） |
 
 ### 策略开发
 
