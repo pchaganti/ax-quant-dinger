@@ -89,3 +89,25 @@ jobs:
 
       - name: Validate docker-compose.ghcr.yml (GHCR mode)
         run: docker compose -f docker-compose.ghcr.yml config -q
+
+      - name: Validate docker-compose.yml + build override (merged)
+        run: docker compose -f docker-compose.yml -f docker-compose.build.yml config -q
+
+  version-check:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify VERSION matches all declarations
+        # Fails the build if any README badge / env.example default / backend
+        # constant has drifted from repo-root VERSION. Run
+        # `python scripts/bump_version.py <new>` locally to fix drift.
+        run: python scripts/check_version.py

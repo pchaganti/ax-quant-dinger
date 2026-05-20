@@ -46,7 +46,7 @@
 
   <p style="margin-top: 1.45rem; margin-bottom: 10px;">
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square&logo=apache" alt="License"></a>
-    <img src="https://img.shields.io/badge/Version-3.0.10-orange?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/github/v/release/brokermr810/QuantDinger?style=flat-square&color=orange&label=Version" alt="Version">
     <img src="https://img.shields.io/badge/Python-3.10%2B%20%7C%20Docker%20image%203.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
     <img src="https://img.shields.io/badge/Docker-Compose%20Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
     <img src="https://img.shields.io/badge/Frontend-Prebuilt-1f8b4c?style=flat-square" alt="Frontend">
@@ -80,7 +80,7 @@
 
 ## Try in 2 minutes
 
-> **Lightest path: pull images, start the stack — no `npm`, no Vue source folder, and no `docker compose up --build`.** The UI comes from GHCR (`quantdinger-frontend:3.0.10` by default); only the backend is built locally on first boot.
+> **Lightest path: pull images, start the stack — no `npm`, no Vue source folder, and no `docker compose up --build`.** The UI comes from GHCR (`quantdinger-frontend:latest` by default); only the backend is built locally on first boot.
 
 **Prerequisites:** [Docker](https://docs.docker.com/get-docker/) with Compose v2 (Docker Desktop on Windows/macOS). **Git** for the standard path below. **Node.js is not required.**
 
@@ -125,13 +125,13 @@ Use **`docker compose`** (space). Legacy **`docker-compose`** (hyphen) works on 
 <details>
 <summary><b>Do not use <code>docker compose up --build</code> for a normal install</b></summary>
 
-`--build` forces a **frontend** build from `./QuantDinger-Vue/`. That directory is **not** shipped in this repo — you will see `QuantDinger-Vue not found` or extra pulls for `node:18-alpine`.
+A plain `docker compose up --build` does **not** rebuild the frontend — the main `docker-compose.yml` only declares `image:` for the frontend service, so `--build` only affects the backend. To rebuild the frontend from local Vue source you must opt in via the `docker-compose.build.yml` override (see below).
 
 | Goal | Command |
 |------|---------|
 | First-time / routine start | `docker compose pull` then `docker compose up -d` |
 | Rebuild **backend** only after code changes | `docker compose up -d --build backend` |
-| Hack on Vue UI from source | Clone [QuantDinger-Vue](https://github.com/brokermr810/QuantDinger-Vue) into `./QuantDinger-Vue/`, then `docker compose up -d --build` |
+| Hack on Vue UI from source | Clone [QuantDinger-Vue](https://github.com/brokermr810/QuantDinger-Vue) into `./QuantDinger-Vue/`, then `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build` |
 
 </details>
 
@@ -352,9 +352,9 @@ docker compose pull
 docker compose up -d
 ```
 
-- **`frontend`** — pulls `ghcr.io/brokermr810/quantdinger-frontend:3.0.10` (no local Vue tree required).
+- **`frontend`** — pulls `ghcr.io/brokermr810/quantdinger-frontend:latest` (no local Vue tree required).
 - **`backend`** — built from `./backend_api_python` on first start if no local image exists yet.
-- Do **not** run `docker compose up -d --build` unless you have cloned **QuantDinger-Vue** into `./QuantDinger-Vue/` for UI development.
+- For UI development from Vue source, clone **QuantDinger-Vue** into `./QuantDinger-Vue/` and add `-f docker-compose.build.yml` to the command (see *Build the frontend from Vue source* below).
 
 Services: **`postgres`**, **`redis`**, **`backend`**, **`frontend`** (see `docker-compose.yml`).
 
@@ -384,7 +384,7 @@ IMAGE_TAG=3.0.10
 # FRONTEND_IMAGE=ghcr.io/<your-fork>/quantdinger-frontend
 ```
 
-Tag resolution: `BACKEND_TAG` / `FRONTEND_TAG` → `IMAGE_TAG` → compose defaults. Without a root `.env`, `docker-compose.yml` pulls `ghcr.io/brokermr810/quantdinger-frontend:3.0.10` (bundled `frontend/dist` was removed); `docker-compose.ghcr.yml` defaults to backend `3.0.9` + frontend `3.0.10`.
+Tag resolution: `BACKEND_TAG` / `FRONTEND_TAG` → `IMAGE_TAG` → compose default (`latest`). Without a root `.env`, both compose files pull `ghcr.io/brokermr810/quantdinger-{backend,frontend}:latest`. Pin a specific release by setting `IMAGE_TAG` (lockstep) or `BACKEND_TAG` / `FRONTEND_TAG` (per-side) — see [GitHub Releases](https://github.com/brokermr810/QuantDinger/releases) for available tags.
 
 #### Alternative: build the frontend from Vue source
 
@@ -392,10 +392,10 @@ If you have access to the **QuantDinger-Vue** repo and want to iterate on UI sou
 
 ```bash
 git clone https://github.com/brokermr810/QuantDinger-Vue.git QuantDinger-Vue
-docker compose up -d --build      # frontend builds from ./QuantDinger-Vue
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-Without `--build` Compose pulls the GHCR image as usual — the `./QuantDinger-Vue/` directory is referenced lazily and may not exist. Point `FRONTEND_SRC_PATH=/abs/path/to/QuantDinger-Vue` if you'd rather keep the source somewhere else. The locally built image is tagged the same way as the published one (`FRONTEND_TAG` / `IMAGE_TAG` rules apply), so it slots into the rest of the stack with no further changes.
+The main `docker-compose.yml` only pulls the GHCR image; the override file `docker-compose.build.yml` adds the local `build:` block. Without the override, `./QuantDinger-Vue/` does not need to exist. Point `FRONTEND_SRC_PATH=/abs/path/to/QuantDinger-Vue` if you'd rather keep the source somewhere else, or set `COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml` in a root `.env` to skip the long `-f -f` invocation. The locally built image is tagged the same way as the published one (`FRONTEND_TAG` / `IMAGE_TAG` rules apply), so it slots into the rest of the stack with no further changes.
 
 ### 5) Verify and sign in
 
@@ -436,7 +436,7 @@ If `py` is not on PATH, use `python` or `python3` in the one-liner that generate
 
 | Symptom | What to check |
 |---------|----------------|
-| `QuantDinger-Vue` not found | You used `--build` without cloning Vue source. Use `docker compose up -d` (no `--build`) or clone into `./QuantDinger-Vue/` first. |
+| `QuantDinger-Vue` not found | You added `-f docker-compose.build.yml` without cloning Vue source. Drop the override (plain `docker compose up -d`) or clone into `./QuantDinger-Vue/` first. |
 | `redis` / `python` / `node` pull fails, `content size of zero` | Docker Hub unreachable from Docker Desktop. Set root `.env` `IMAGE_PREFIX=docker.m.daocloud.io/library/` and/or configure **Docker Desktop → Proxies** (system VPN alone is often not enough). |
 | Backend exits immediately | `SECRET_KEY` still default, or invalid `.env` syntax. Read `docker compose logs backend`. |
 | Blank page or API errors from browser | `FRONTEND_URL` / origins mismatch; API not reachable from the host you opened. |

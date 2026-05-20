@@ -46,7 +46,7 @@
 
   <p style="margin-top: 1.45rem; margin-bottom: 10px;">
     <a href="../LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square&logo=apache" alt="License"></a>
-    <img src="https://img.shields.io/badge/Version-3.0.10-orange?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/github/v/release/brokermr810/QuantDinger?style=flat-square&color=orange&label=Version" alt="Version">
     <img src="https://img.shields.io/badge/Python-3.10%2B%20%7C%20Docker%20镜像%203.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
     <img src="https://img.shields.io/badge/Docker-Compose%20Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
     <img src="https://img.shields.io/badge/Frontend-预构建-1f8b4c?style=flat-square" alt="Frontend">
@@ -80,7 +80,7 @@
 
 ## 两分钟试用
 
-> **最轻量：先 `pull` 再 `up`，不要 `docker compose up --build`。** 前端用 GHCR 预构建镜像（默认 `3.0.10`），无需 Node、无需 `QuantDinger-Vue` 目录；仅后端在首次启动时本地构建。
+> **最轻量：先 `pull` 再 `up`，不要 `docker compose up --build`。** 前端用 GHCR 预构建镜像（默认 `latest`，可通过 `IMAGE_TAG` / `FRONTEND_TAG` 固定到具体版本），无需 Node、无需 `QuantDinger-Vue` 目录；仅后端在首次启动时本地构建。
 
 **前置条件：** [Docker](https://docs.docker.com/get-docker/) + Compose v2（Windows/macOS 用 Docker Desktop）。标准路径需要 **Git**。**不需要 Node.js**。
 
@@ -123,15 +123,15 @@ docker compose up -d
 请用 **`docker compose`**（空格）；旧版 **`docker-compose`** 亦可。已装 **Git Bash** 可直接跑 Bash 一行命令。
 
 <details>
-<summary><b>日常安装不要用 <code>docker compose up --build</code></b></summary>
+<summary><b>普通的 <code>docker compose up --build</code> 不会重建前端</b></summary>
 
-`--build` 会强制从 **`./QuantDinger-Vue/`** 构建前端，本仓库不包含该目录，会报 `QuantDinger-Vue not found`，并额外拉取 `node:18-alpine` 等基础镜像。
+主 `docker-compose.yml` 中前端服务只声明 `image:`，所以 `--build` 仅会重建后端。要从本地 Vue 源码构建前端，必须叠加 `docker-compose.build.yml` 这个 override 文件（详见下文）。
 
 | 目的 | 命令 |
 |------|------|
 | 首次 / 日常启动 | `docker compose pull` → `docker compose up -d` |
 | 只改了后端代码 | `docker compose up -d --build backend` |
-| 二开 Vue 前端 | 将 [QuantDinger-Vue](https://github.com/brokermr810/QuantDinger-Vue) 克隆到 `./QuantDinger-Vue/` 后再 `docker compose up -d --build` |
+| 二开 Vue 前端 | 将 [QuantDinger-Vue](https://github.com/brokermr810/QuantDinger-Vue) 克隆到 `./QuantDinger-Vue/` 后再 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build` |
 
 </details>
 
@@ -352,9 +352,9 @@ docker compose pull
 docker compose up -d
 ```
 
-- **`frontend`**：拉取 `ghcr.io/brokermr810/quantdinger-frontend:3.0.10`，无需本地 Vue 目录。
+- **`frontend`**：拉取 `ghcr.io/brokermr810/quantdinger-frontend:latest`，无需本地 Vue 目录。
 - **`backend`**：首次若无本地镜像，会从 `./backend_api_python` 自动构建。
-- **不要**使用 `docker compose up -d --build`，除非已在 `./QuantDinger-Vue/` 放置前端源码。
+- 想用本地 Vue 源码做 UI 开发，请将 **QuantDinger-Vue** 克隆到 `./QuantDinger-Vue/`，并在命令中追加 `-f docker-compose.build.yml`（见下文 *从 Vue 源码构建前端*）。
 
 默认服务：**`postgres`**、**`redis`**、**`backend`**、**`frontend`**。
 
@@ -383,7 +383,7 @@ IMAGE_TAG=3.0.10
 # FRONTEND_IMAGE=ghcr.io/<你的fork>/quantdinger-frontend
 ```
 
-Tag 解析优先级：`BACKEND_TAG` / `FRONTEND_TAG` → `IMAGE_TAG` → compose 默认值。无根目录 `.env` 时，`docker-compose.yml` 拉取 `ghcr.io/brokermr810/quantdinger-frontend:3.0.10`（仓库已不再包含 `frontend/dist`）；`docker-compose.ghcr.yml` 默认后端 `3.0.9`、前端 `3.0.10`。
+Tag 解析优先级：`BACKEND_TAG` / `FRONTEND_TAG` → `IMAGE_TAG` → compose 默认值 (`latest`)。无根目录 `.env` 时，两个 compose 文件都拉 `ghcr.io/brokermr810/quantdinger-{backend,frontend}:latest`。想固定到某个版本就设置 `IMAGE_TAG`（前后端一起）或 `BACKEND_TAG` / `FRONTEND_TAG`（单边）—— 可用 tag 见 [GitHub Releases](https://github.com/brokermr810/QuantDinger/releases)。
 
 #### 备选方案：从 Vue 源码本地构建前端
 
@@ -391,10 +391,10 @@ Tag 解析优先级：`BACKEND_TAG` / `FRONTEND_TAG` → `IMAGE_TAG` → compose
 
 ```bash
 git clone https://github.com/brokermr810/QuantDinger-Vue.git QuantDinger-Vue
-docker compose up -d --build      # frontend 从 ./QuantDinger-Vue 本地构建
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-不带 `--build` 时 Compose 照常从 GHCR 拉镜像——`./QuantDinger-Vue/` 是惰性求值，不存在也无所谓。想换路径就设 `FRONTEND_SRC_PATH=/abs/path/to/QuantDinger-Vue`。本地构建出来的镜像 tag 仍走 `FRONTEND_TAG` / `IMAGE_TAG` 那套规则，跟其它服务无缝衔接，不用改其它配置。
+主 `docker-compose.yml` 只声明拉镜像；override 文件 `docker-compose.build.yml` 额外加上本地 `build:` 块。不叠加 override 时，`./QuantDinger-Vue/` 不需要存在。想换源码路径就设 `FRONTEND_SRC_PATH=/abs/path/to/QuantDinger-Vue`，或者在根目录 `.env` 里加 `COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml` 省掉长长的 `-f -f` 写法。本地构建出来的镜像 tag 仍走 `FRONTEND_TAG` / `IMAGE_TAG` 那套规则，跟其它服务无缝衔接，不用改其它配置。
 
 ### 5）验证与登录
 
@@ -427,7 +427,7 @@ AI 分析、自然语言生成代码等需至少配置一个 LLM 供应商。打
 
 | 现象 | 排查 |
 |------|------|
-| `QuantDinger-Vue` 路径不存在 | 误用了 `--build` 且未克隆 Vue 仓；改用 `docker compose up -d`，或先克隆到 `./QuantDinger-Vue/`。 |
+| `QuantDinger-Vue` 路径不存在 | 加了 `-f docker-compose.build.yml` 但未克隆 Vue 源码；去掉 override（直接 `docker compose up -d`），或先克隆到 `./QuantDinger-Vue/`。 |
 | 拉取 `redis`/`python`/`node` 失败、`content size of zero` | Docker 未走代理或镜像站异常；根目录 `.env` 设 `IMAGE_PREFIX=docker.m.daocloud.io/library/`，并在 Docker Desktop 配置 Proxies。 |
 | backend 立刻退出 | `SECRET_KEY` 仍为默认值，或 `.env` 语法错误；`docker compose logs backend`。 |
 | 浏览器打不开或 API 报错 | `FRONTEND_URL` / 访问域名不一致；本机防火墙或未映射端口。 |

@@ -46,7 +46,7 @@
 
   <p style="margin-top: 1.45rem; margin-bottom: 10px;">
     <a href="../LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square&logo=apache" alt="License"></a>
-    <img src="https://img.shields.io/badge/Version-3.0.9-orange?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/github/v/release/brokermr810/QuantDinger?style=flat-square&color=orange&label=Version" alt="Version">
     <img src="https://img.shields.io/badge/Python-3.10%2B%20%7C%20Docker%203.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
     <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
     <img src="https://img.shields.io/github/stars/brokermr810/QuantDinger?style=flat-square&logo=github" alt="Stars">
@@ -208,7 +208,7 @@ flowchart LR
      docker compose -f docker-compose.ghcr.yml up -d
      ```
      Image mặc định: `ghcr.io/brokermr810/quantdinger-{backend,frontend}:latest`. Ghim đồng thời cả hai bằng `IMAGE_TAG=v3.0.9` trong `.env` cục bộ, hoặc ghim từng bên với `BACKEND_TAG` / `FRONTEND_TAG`.
-   - **Phát triển frontend cục bộ**: clone `QuantDinger-Vue` vào `./QuantDinger-Vue/` (đã gitignore) rồi chạy `docker compose up -d --build`. Chi tiết xem [README tiếng Anh](../README.md#alternative-build-the-frontend-from-vue-source).
+   - **Phát triển frontend cục bộ**: clone `QuantDinger-Vue` vào `./QuantDinger-Vue/` (đã gitignore) rồi chạy `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`. Chi tiết xem [README tiếng Anh](../README.md#alternative-build-the-frontend-from-vue-source).
 4. **Web:** `http://localhost:8888` · **Sức khỏe API:** `http://localhost:5000/api/health`
 5. Đổi mật khẩu quản trị mặc định trước production. Đặt **`FRONTEND_URL`** trong `backend_api_python/.env` đúng URL thực tế.
 
