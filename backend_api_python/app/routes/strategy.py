@@ -1060,12 +1060,62 @@ def get_positions():
                 if normalize_strategy_symbol(str(r.get("symbol") or "")).upper() in allowed_upper
             ]
 
+        from app.services.live_trading.strategy_position_sync import strategy_uses_fill_ledger
+
+        uses_fill_ledger = strategy_uses_fill_ledger(
+            {
+                "strategy_type": st.get("strategy_type"),
+                "bot_type": st.get("bot_type") or trading_config.get("bot_type"),
+                "trading_config": trading_config,
+            }
+        )
+        position_meta = {
+            "source": "fill_ledger" if uses_fill_ledger else "strategy_ledger",
+            "synced_from_exchange": execution_mode == "live" and not uses_fill_ledger,
+            "hint_zh": (
+                "以下为策略账本持仓（由成交记录累计），网格策略不与交易所实时对账。"
+                "请对照 exchange_snapshot 查看交易所真实持仓。"
+                if uses_fill_ledger
+                else "以下为策略账本持仓，已与交易所对账或按成交重建。"
+            ),
+            "hint_en": (
+                "Strategy ledger positions (from fills). Grid bots skip live exchange reconciliation; "
+                "compare exchange_snapshot for actual exchange holdings."
+                if uses_fill_ledger
+                else "Strategy ledger positions, reconciled with the exchange when live."
+            ),
+        }
+
+        exchange_snapshot = None
+        bot_type = str(st.get("bot_type") or trading_config.get("bot_type") or "").strip().lower()
+        if execution_mode == "live" and bot_type == "grid":
+            try:
+                from app.services.exchange_execution import resolve_exchange_config
+                from app.services.live_trading.factory import create_client
+                from app.services.grid.exchange_requirements import fetch_exchange_dual_leg_snapshot
+
+                resolved_ex = resolve_exchange_config(exchange_config, user_id=int(user_id or 1))
+                sym = str(st.get("symbol") or trading_config.get("symbol") or "").strip()
+                if sym and resolved_ex:
+                    client = create_client(resolved_ex, market_type=market_type)
+                    exchange_snapshot = fetch_exchange_dual_leg_snapshot(
+                        client,
+                        symbol=sym,
+                        market_type=market_type,
+                        exchange_config=resolved_ex,
+                    )
+                    exchange_snapshot["symbol"] = sym
+            except Exception as e:
+                logger.debug("grid exchange_snapshot for strategy %s: %s", strategy_id, e)
+
         return jsonify({
             'code': 1,
             'msg': 'success',
             'data': {
                 'positions': out,
                 'items': out,
+                'position_meta': position_meta,
+                'exchange_snapshot': exchange_snapshot,
             },
         })
     except Exception as e:

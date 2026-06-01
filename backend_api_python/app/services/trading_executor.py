@@ -792,10 +792,9 @@ class TradingExecutor:
                     del self.running_strategies[strategy_id]
                     self._exchange_fee_cache.pop(strategy_id, None)
                     try:
-                        from app.services.grid.runner import get_runner
-                        gr = get_runner(strategy_id)
-                        if gr:
-                            gr.shutdown()
+                        from app.services.grid.runner import shutdown_grid_for_strategy
+
+                        shutdown_grid_for_strategy(strategy_id)
                     except Exception:
                         pass
                     logger.info(f"Strategy {strategy_id} stopped")
@@ -803,6 +802,12 @@ class TradingExecutor:
                     append_strategy_log(strategy_id, "info", "Strategy stop requested (run flag cleared)")
                 else:
                     logger.info(f"Strategy {strategy_id} marked stopped in DB (no active thread)")
+                    try:
+                        from app.services.grid.runner import shutdown_grid_for_strategy
+
+                        shutdown_grid_for_strategy(strategy_id)
+                    except Exception:
+                        pass
                 return True
                 
         except Exception as e:

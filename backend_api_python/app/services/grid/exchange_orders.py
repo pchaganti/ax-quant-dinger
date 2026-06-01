@@ -412,14 +412,34 @@ def cancel_grid_order(
     market_type: str,
     exchange_order_id: str = "",
     client_order_id: str = "",
+    exchange_config: Optional[Dict[str, Any]] = None,
 ) -> None:
     mt = str(market_type or "swap").strip().lower()
+    ex_cfg = exchange_config if isinstance(exchange_config, dict) else {}
     if isinstance(client, OkxClient):
         client.cancel_order(
             market_type=mt,
             symbol=str(symbol),
             ord_id=str(exchange_order_id or ""),
             cl_ord_id=str(client_order_id or ""),
+        )
+        return
+    if isinstance(client, BitgetMixClient):
+        product_type = str(ex_cfg.get("product_type") or ex_cfg.get("productType") or "USDT-FUTURES")
+        margin_coin = str(ex_cfg.get("margin_coin") or ex_cfg.get("marginCoin") or "USDT")
+        client.cancel_order(
+            symbol=str(symbol),
+            product_type=product_type,
+            margin_coin=margin_coin,
+            order_id=str(exchange_order_id or ""),
+            client_oid=str(client_order_id or ""),
+        )
+        return
+    if isinstance(client, BitgetSpotClient):
+        client.cancel_order(
+            symbol=str(symbol),
+            order_id=str(exchange_order_id or ""),
+            client_order_id=str(client_order_id or ""),
         )
         return
     if hasattr(client, "cancel_order"):
@@ -429,7 +449,10 @@ def cancel_grid_order(
         if exchange_order_id:
             kwargs["order_id"] = exchange_order_id
         if client_order_id:
-            kwargs["client_order_id"] = client_order_id
+            if "client_oid" in client.cancel_order.__code__.co_varnames:
+                kwargs["client_oid"] = client_order_id
+            else:
+                kwargs["client_order_id"] = client_order_id
         client.cancel_order(**kwargs)
 
 

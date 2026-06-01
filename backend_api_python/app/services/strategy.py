@@ -875,6 +875,18 @@ class StrategyService:
             'value_key': value_key or ''
         }
 
+    @staticmethod
+    def _sanitize_grid_trading_config(trading_config: Dict[str, Any]) -> Dict[str, Any]:
+        tc = dict(trading_config or {})
+        bot_type = str(tc.get('bot_type') or '').strip().lower()
+        if bot_type != 'grid':
+            return tc
+        from app.services.grid.config import sanitize_grid_bot_params
+
+        bp = tc.get('bot_params') if isinstance(tc.get('bot_params'), dict) else {}
+        tc['bot_params'] = sanitize_grid_bot_params(bp)
+        return tc
+
     def _build_bot_display(self, trading_config: Dict[str, Any]) -> Dict[str, Any]:
         tc = trading_config if isinstance(trading_config, dict) else {}
         bot_type = str(tc.get('bot_type') or '').strip().lower()
@@ -920,20 +932,27 @@ class StrategyService:
             return display
 
         if bot_type == 'grid':
-            display['strategy_params'] = [
+            direction = str(params.get('gridDirection') or 'neutral').strip().lower()
+            grid_items = [
                 self._display_item('upperPrice', 'trading-bot.grid.upperPrice', self._to_float(params.get('upperPrice'), 0.0), 'usdt'),
                 self._display_item('lowerPrice', 'trading-bot.grid.lowerPrice', self._to_float(params.get('lowerPrice'), 0.0), 'usdt'),
                 self._display_item('gridCount', 'trading-bot.grid.gridCount', self._to_int(params.get('gridCount'), 0), 'number'),
                 self._display_item('amountPerGrid', 'trading-bot.grid.amountPerGrid', self._to_float(params.get('amountPerGrid'), 0.0), 'usdt'),
                 self._display_item('gridMode', 'trading-bot.grid.mode', params.get('gridMode') or 'arithmetic', 'enum', f"trading-bot.grid.{params.get('gridMode') or 'arithmetic'}"),
-                self._display_item('gridDirection', 'trading-bot.grid.direction', params.get('gridDirection') or 'neutral', 'enum', f"trading-bot.grid.{params.get('gridDirection') or 'neutral'}"),
-                self._display_item('initialPositionPct', 'trading-bot.grid.initialPositionPct', self._to_float(params.get('initialPositionPct'), 0.0), 'percent'),
+                self._display_item('gridDirection', 'trading-bot.grid.direction', direction, 'enum', f"trading-bot.grid.{direction}"),
+            ]
+            if direction in ('long', 'short'):
+                grid_items.append(
+                    self._display_item('initialPositionPct', 'trading-bot.grid.initialPositionPct', self._to_float(params.get('initialPositionPct'), 0.0), 'percent')
+                )
+            grid_items.append(
                 self._display_item('boundaryAction', 'trading-bot.grid.boundaryAction', params.get('boundaryAction') or 'pause', 'enum', {
                     'pause': 'trading-bot.grid.boundaryPause',
                     'stop_loss': 'trading-bot.grid.boundaryStopLoss',
                     'hold': 'trading-bot.grid.boundaryHold',
-                }.get(params.get('boundaryAction') or 'pause', 'trading-bot.grid.boundaryPause')),
-            ]
+                }.get(params.get('boundaryAction') or 'pause', 'trading-bot.grid.boundaryPause'))
+            )
+            display['strategy_params'] = grid_items
             display['strategy_params'].extend([
                 self._display_item('orderMode', 'trading-bot.grid.orderType', params.get('orderMode') or 'maker', 'enum', 'trading-bot.grid.limitOrder' if (params.get('orderMode') or 'maker') == 'maker' else 'trading-bot.grid.marketOrder'),
                 self._display_item('adaptiveBounds', 'trading-bot.grid.adaptiveBounds', bool(params.get('adaptiveBounds', True)), 'boolean'),
@@ -1150,6 +1169,7 @@ class StrategyService:
         trading_config = _strip_legacy_risk_pct_basis(
             _apply_default_strict_mode(payload.get('trading_config') or {})
         )
+        trading_config = self._sanitize_grid_trading_config(trading_config)
         if strategy_type == 'IndicatorStrategy':
             trading_config = _apply_risk_flat_from_indicator_code(
                 trading_config, indicator_config
@@ -1537,6 +1557,8 @@ class StrategyService:
             trading_config = _apply_risk_flat_from_indicator_code(
                 trading_config, indicator_config
             )
+
+        trading_config = self._sanitize_grid_trading_config(trading_config)
 
         # When credential_id is present, strip raw API keys to avoid
         # storing secrets in the strategy record — they live in qd_exchange_credentials.

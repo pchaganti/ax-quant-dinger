@@ -640,6 +640,7 @@ class GridEngine:
                         market_type=self.cfg.market_type,
                         exchange_order_id=extra.exchange_order_id,
                         client_order_id=extra.client_order_id,
+                        exchange_config=self.exchange_config,
                     )
                 except Exception as e:
                     logger.debug("grid entry dedupe cancel sid=%s cell=%s: %s", self.strategy_id, cell_idx, e)
@@ -675,6 +676,7 @@ class GridEngine:
                         market_type=self.cfg.market_type,
                         exchange_order_id=extra.exchange_order_id,
                         client_order_id=extra.client_order_id,
+                        exchange_config=self.exchange_config,
                     )
                 except Exception as e:
                     logger.debug("grid dedupe cancel sid=%s cell=%s: %s", self.strategy_id, cell_idx, e)
@@ -917,6 +919,7 @@ class GridEngine:
                             market_type=self.cfg.market_type,
                             exchange_order_id=ex_oid,
                             client_order_id=coid,
+                            exchange_config=self.exchange_config,
                         )
                     except Exception as ce:
                         logger.warning(
@@ -1094,6 +1097,7 @@ class GridEngine:
                         market_type=self.cfg.market_type,
                         exchange_order_id=o.exchange_order_id,
                         client_order_id=o.client_order_id,
+                        exchange_config=self.exchange_config,
                     )
                 except Exception as e:
                     logger.debug("cancel grid entry: %s", e)
@@ -1125,6 +1129,7 @@ class GridEngine:
                         market_type=self.cfg.market_type,
                         exchange_order_id=o.exchange_order_id,
                         client_order_id=o.client_order_id,
+                        exchange_config=self.exchange_config,
                     )
                 except Exception as e:
                     logger.debug("cancel grid order: %s", e)
